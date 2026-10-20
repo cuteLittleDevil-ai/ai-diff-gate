@@ -25,7 +25,7 @@
 
 | 原则 | 含义 |
 |------|------|
-| 适配与编排分离 | 厂商协议细节进 adapter；fan-out / compare / handler 只依赖统一 Provider 抽象 |
+| 适配与编排分离 | 厂商协议细节进 adapter；fanout / compare / handler 只依赖统一 Provider 抽象 |
 | 同步优先 | MVP 走请求-响应；SSE 作为扩展点预留，不阻塞主路径 |
 | 配置驱动 | 模型列表、endpoint、鉴权相关项来自配置，而非硬编码 |
 | 建议未拍板不写成事实 | HTTP 框架、失败语义、Diff 粒度、是否兼容代理等一律「建议 + 选项 + 待确认」 |
