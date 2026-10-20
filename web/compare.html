@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ai-diff-gate</title>
+  <style>
+    :root { font-family: system-ui, sans-serif; color: #1a1a1a; background: #f6f7f9; }
+    body { max-width: 1200px; margin: 0 auto; padding: 1.5rem; }
+    h1 { margin-top: 0; }
+    label { display: block; font-weight: 600; margin-bottom: 0.35rem; }
+    textarea { width: 100%; min-height: 120px; padding: 0.75rem; border: 1px solid #ccc; border-radius: 6px; font: inherit; box-sizing: border-box; }
+    .models { display: flex; flex-wrap: wrap; gap: 1rem; margin: 1rem 0; }
+    .models label { font-weight: normal; display: flex; align-items: center; gap: 0.35rem; }
+    button { background: #2563eb; color: #fff; border: none; padding: 0.6rem 1.2rem; border-radius: 6px; font: inherit; cursor: pointer; }
+    button:hover { background: #1d4ed8; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; margin-top: 2rem; }
+    .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 1rem; }
+    .card h3 { margin: 0 0 0.5rem; font-size: 1rem; }
+    .status-ok { color: #15803d; }
+    .status-err { color: #b91c1c; }
+    .meta { font-size: 0.85rem; color: #64748b; margin-bottom: 0.75rem; }
+    pre { white-space: pre-wrap; word-break: break-word; margin: 0; font-size: 0.9rem; }
+    .diff-block { margin-top: 2rem; }
+    .diff-block h2 { font-size: 1.1rem; }
+    .diff pre { background: #0f172a; color: #e2e8f0; padding: 1rem; border-radius: 8px; overflow-x: auto; }
+  </style>
+</head>
+<body>
+  <h1>ai-diff-gate</h1>
+  <p>单 Prompt 并发扇出多个模型，并排查看回复与行级文本 Diff。</p>
+
+  <form method="post" action="/compare">
+    <label for="prompt">Prompt</label>
+    <textarea id="prompt" name="prompt" required placeholder="输入要对比的 Prompt…">{{.Prompt}}</textarea>
+
+    <p><label>模型（不选则使用配置中全部启用模型）</label></p>
+    <div class="models">
+      {{range .Models}}
+      {{$modelID := .ID}}
+      <label>
+        <input type="checkbox" name="models" value="{{$modelID}}"
+          {{if not $.Selected}}checked{{else}}{{range $.Selected}}{{if eq . $modelID}}checked{{end}}{{end}}{{end}}>
+        {{.DisplayName}} <code>{{$modelID}}</code>
+      </label>
+      {{else}}
+      <p>配置中暂无启用模型，请编辑 <code>config.yaml</code>。</p>
+      {{end}}
+    </div>
+
+    <button type="submit">对比</button>
+  </form>
+
+  {{if .Results}}
+  <section class="grid">
+    {{range .Results}}
+    <article class="card">
+      <h3>{{.DisplayName}} <small>({{.ModelID}})</small></h3>
+      {{if .OK}}
+      <p class="meta status-ok">成功 · {{.LatencyMs}} ms
+        {{if .TotalTokens}} · tokens: {{if .PromptTokens}}{{.PromptTokens}}{{else}}N/A{{end}} / {{if .CompletionTokens}}{{.CompletionTokens}}{{else}}N/A{{end}} / {{.TotalTokens}}{{end}}
+      </p>
+      <pre>{{.Content}}</pre>
+      {{else}}
+      <p class="meta status-err">失败 · {{.LatencyMs}} ms</p>
+      <pre>{{.Error}}</pre>
+      {{end}}
+    </article>
+    {{end}}
+  </section>
+  {{end}}
+
+  {{if .Diffs}}
+  <section class="diff-block">
+    <h2>文本 Diff</h2>
+    {{range .Diffs}}
+    <div class="diff card">
+      <h3>{{.LeftModelID}} ↔ {{.RightModelID}} <small>({{.Granularity}})</small></h3>
+      <pre>{{.UnifiedDiff}}</pre>
+    </div>
+    {{end}}
+  </section>
+  {{end}}
+</body>
+</html>

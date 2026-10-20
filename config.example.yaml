@@ -1,0 +1,25 @@
+server:
+  addr: ":8080"
+
+fanout:
+  timeout_seconds: 60
+
+compare:
+  granularity: line
+  ignore_whitespace: false
+
+models:
+  - id: openai-gpt
+    provider: openai
+    display_name: "OpenAI GPT-4o mini"
+    model: "gpt-4o-mini"
+    base_url: "https://api.openai.com/v1"
+    api_key_env: "OPENAI_API_KEY"
+    # api_key: "sk-..."  # 仅本地 Demo；勿提交真实 Key
+
+  - id: anthropic-claude
+    provider: anthropic
+    display_name: "Anthropic Claude"
+    model: "claude-3-5-sonnet-latest"
+    base_url: "https://api.anthropic.com"
+    api_key_env: "ANTHROPIC_API_KEY"
