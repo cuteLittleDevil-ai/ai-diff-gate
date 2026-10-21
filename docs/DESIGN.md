@@ -97,6 +97,7 @@ ai-diff-gate/
 │   ├── adapter/          # 各厂商协议适配
 │   │   ├── openai.go
 │   │   ├── anthropic.go
+│   │   ├── deepseek.go
 │   │   └── gemini.go     # 扩展时再加
 │   ├── provider/         # 统一 Provider 接口与内部请求/响应类型
 │   ├── fanout/           # 并发调用与结果汇总
