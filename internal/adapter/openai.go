@@ -17,11 +17,13 @@ import (
 type openAIProvider struct {
 	cfg    modelspec.Model
 	client *http.Client
+	name   string
 }
 
 // NewOpenAI creates an OpenAI-compatible chat provider.
+// Spec: https://platform.openai.com/docs/api-reference/chat/create
 func NewOpenAI(cfg modelspec.Model, client *http.Client) provider.Provider {
-	return &openAIProvider{cfg: cfg, client: client}
+	return &openAIProvider{cfg: cfg, client: client, name: "openai"}
 }
 
 func (p *openAIProvider) ID() string          { return p.cfg.ID }
@@ -100,15 +102,15 @@ func (p *openAIProvider) Chat(ctx context.Context, req *provider.ChatRequest) (*
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("openai API %s: %s", resp.Status, truncate(string(raw), 512))
+		return nil, fmt.Errorf("%s API %s: %s", p.name, resp.Status, truncate(string(raw), 512))
 	}
 
 	var parsed openAIResponse
 	if err := json.Unmarshal(raw, &parsed); err != nil {
-		return nil, fmt.Errorf("decode openai response: %w", err)
+		return nil, fmt.Errorf("decode %s response: %w", p.name, err)
 	}
 	if parsed.Error != nil && parsed.Error.Message != "" {
-		return nil, fmt.Errorf("openai error: %s", parsed.Error.Message)
+		return nil, fmt.Errorf("%s error: %s", p.name, parsed.Error.Message)
 	}
 	content := ""
 	if len(parsed.Choices) > 0 {
