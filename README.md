@@ -4,7 +4,7 @@
 
 ## 功能
 
-- OpenAI、Anthropic 协议适配（可扩展 adapter）
+- OpenAI、Anthropic、DeepSeek 协议适配（可扩展 adapter）
 - Fan-out 并发调用，单模型超时默认 60s，部分失败 continue
 - 行级 unified diff（不忽略空白）
 - `GET` / `POST /compare` 对比页，`POST /api/v1/compare` JSON API
@@ -26,6 +26,7 @@ cp config.example.yaml config.yaml
 ```bash
 export OPENAI_API_KEY="your-key"
 export ANTHROPIC_API_KEY="your-key"
+export DEEPSEEK_API_KEY="your-key"
 ```
 
 3. 构建并启动：

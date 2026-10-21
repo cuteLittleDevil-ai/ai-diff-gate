@@ -20,6 +20,7 @@ type anthropicProvider struct {
 }
 
 // NewAnthropic creates an Anthropic Messages API provider.
+// Spec: https://docs.anthropic.com/en/api/messages
 func NewAnthropic(cfg modelspec.Model, client *http.Client) provider.Provider {
 	return &anthropicProvider{cfg: cfg, client: client}
 }
