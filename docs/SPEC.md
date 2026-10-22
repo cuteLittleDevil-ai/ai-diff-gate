@@ -20,7 +20,7 @@
 
 | 包含 | 不包含（见第 10 节） |
 |------|----------------------|
-| 配置驱动的多模型接入（至少 OpenAI、Anthropic、DeepSeek 协议形态） | 生产网关、用户体系、计费、HA |
+| 配置驱动的多模型接入（至少 OpenAI、Anthropic、DeepSeek、MiniMax 协议形态） | 生产网关、用户体系、计费、HA |
 | Fan-out、文本 Diff、HTML 展示 | 语义相似度、历史持久化 |
 | JSON API、延迟/token 展示 | — |
 | **SSE 流式对比**（`POST /api/v1/compare/stream`） | — |
@@ -74,6 +74,13 @@ models:
     model: "deepseek-chat"
     base_url: "https://api.deepseek.com/v1"
     api_key_env: "DEEPSEEK_API_KEY"
+
+  - id: minimax-m3.1-flash
+    provider: minimax
+    display_name: "MiniMax M3.1 Flash"
+    model: "MiniMax-M3.1-Flash"
+    base_url: "https://api.minimax.io/v1"
+    api_key_env: "MINIMAX_API_KEY"
 
 compare:
   granularity: line      # 建议默认 line；可选 word | paragraph（Q2）
