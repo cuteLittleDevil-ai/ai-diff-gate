@@ -29,9 +29,10 @@ func (p *anthropicProvider) ID() string          { return p.cfg.ID }
 func (p *anthropicProvider) DisplayName() string { return p.cfg.DisplayName }
 
 type anthropicRequest struct {
-	Model     string              `json:"model"`
-	MaxTokens int                 `json:"max_tokens"`
-	Messages  []anthropicMessage  `json:"messages"`
+	Model     string             `json:"model"`
+	MaxTokens int                `json:"max_tokens"`
+	Messages  []anthropicMessage `json:"messages"`
+	Stream    bool               `json:"stream,omitempty"`
 }
 
 type anthropicMessage struct {
@@ -40,7 +41,7 @@ type anthropicMessage struct {
 }
 
 type anthropicResponse struct {
-	Model string `json:"model"`
+	Model   string `json:"model"`
 	Content []struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
@@ -55,7 +56,36 @@ type anthropicResponse struct {
 	} `json:"error"`
 }
 
+type anthropicStreamEvent struct {
+	Type      string `json:"type"`
+	Index     int    `json:"index"`
+	ContentBlock *struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	} `json:"content_block"`
+	Delta *struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	} `json:"delta"`
+	Usage *struct {
+		InputTokens  int `json:"input_tokens"`
+		OutputTokens int `json:"output_tokens"`
+	} `json:"usage"`
+	Error *struct {
+		Type    string `json:"type"`
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
 func (p *anthropicProvider) Chat(ctx context.Context, req *provider.ChatRequest) (*provider.ChatResponse, error) {
+	return p.chat(ctx, req, false, nil)
+}
+
+func (p *anthropicProvider) ChatStream(ctx context.Context, req *provider.ChatRequest, onDelta provider.DeltaFunc) (*provider.ChatResponse, error) {
+	return p.chat(ctx, req, true, onDelta)
+}
+
+func (p *anthropicProvider) chat(ctx context.Context, req *provider.ChatRequest, stream bool, onDelta provider.DeltaFunc) (*provider.ChatResponse, error) {
 	key, err := p.cfg.ResolveAPIKey()
 	if err != nil {
 		return nil, err
@@ -78,6 +108,7 @@ func (p *anthropicProvider) Chat(ctx context.Context, req *provider.ChatRequest)
 		Model:     model,
 		MaxTokens: 1024,
 		Messages:  msgs,
+		Stream:    stream,
 	})
 	if err != nil {
 		return nil, err
@@ -93,6 +124,9 @@ func (p *anthropicProvider) Chat(ctx context.Context, req *provider.ChatRequest)
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("x-api-key", key)
 	httpReq.Header.Set("anthropic-version", "2023-06-01")
+	if stream {
+		httpReq.Header.Set("Accept", "text/event-stream")
+	}
 
 	start := time.Now()
 	resp, err := p.client.Do(httpReq)
@@ -102,15 +136,72 @@ func (p *anthropicProvider) Chat(ctx context.Context, req *provider.ChatRequest)
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		raw, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("anthropic API %s: %s", resp.Status, truncate(string(raw), 512))
+	}
+
+	if stream {
+		return p.readStream(resp.Body, latency, req.Model, onDelta)
+	}
+
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
+	return p.parseResponse(raw, latency, req.Model)
+}
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("anthropic API %s: %s", resp.Status, truncate(string(raw), 512))
+func (p *anthropicProvider) readStream(r io.Reader, latency int64, model string, onDelta provider.DeltaFunc) (*provider.ChatResponse, error) {
+	var content strings.Builder
+	var promptTokens, completionTokens int
+	err := forEachSSE(r, func(ev sseEvent) error {
+		if ev.Data == "" {
+			return nil
+		}
+		var parsed anthropicStreamEvent
+		if err := json.Unmarshal([]byte(ev.Data), &parsed); err != nil {
+			return fmt.Errorf("decode anthropic stream chunk: %w", err)
+		}
+		if parsed.Error != nil && parsed.Error.Message != "" {
+			return fmt.Errorf("anthropic stream error: %s", parsed.Error.Message)
+		}
+		switch parsed.Type {
+		case "content_block_delta":
+			if parsed.Delta != nil && parsed.Delta.Text != "" {
+				content.WriteString(parsed.Delta.Text)
+				if onDelta != nil {
+					onDelta(provider.StreamDelta{Content: parsed.Delta.Text})
+				}
+			}
+		case "message_delta":
+			if parsed.Usage != nil {
+				promptTokens = parsed.Usage.InputTokens
+				completionTokens = parsed.Usage.OutputTokens
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
+	out := &provider.ChatResponse{
+		Content:   content.String(),
+		Model:     model,
+		LatencyMs: latency,
+	}
+	if promptTokens > 0 || completionTokens > 0 {
+		pt, ct := promptTokens, completionTokens
+		tt := pt + ct
+		out.PromptTokens = &pt
+		out.CompletionTokens = &ct
+		out.TotalTokens = &tt
+	}
+	return out, nil
+}
+
+func (p *anthropicProvider) parseResponse(raw []byte, latency int64, model string) (*provider.ChatResponse, error) {
 	var parsed anthropicResponse
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		return nil, fmt.Errorf("decode anthropic response: %w", err)
@@ -128,7 +219,7 @@ func (p *anthropicProvider) Chat(ctx context.Context, req *provider.ChatRequest)
 
 	out := &provider.ChatResponse{
 		Content:   strings.Join(parts, ""),
-		Model:     firstNonEmpty(parsed.Model, req.Model),
+		Model:     firstNonEmpty(parsed.Model, model),
 		LatencyMs: latency,
 	}
 	if parsed.Usage != nil {

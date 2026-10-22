@@ -27,7 +27,7 @@ func main() {
 		log.Fatalf("load config %s: %v", configPath, err)
 	}
 
-	providers, err := config.BuildProviders(cfg, &http.Client{Timeout: cfg.FanoutTimeout()})
+	providers, err := config.BuildProviders(cfg, &http.Client{})
 	if err != nil {
 		log.Fatalf("build providers: %v", err)
 	}

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -43,6 +44,7 @@ func (s *Server) Register(mux *http.ServeMux) {
 	mux.HandleFunc("/", s.handleComparePage)
 	mux.HandleFunc("/compare", s.handleComparePage)
 	mux.HandleFunc("/api/v1/compare", s.handleCompareJSON)
+	mux.HandleFunc("/api/v1/compare/stream", s.handleCompareStream)
 }
 
 func (s *Server) handleComparePage(w http.ResponseWriter, r *http.Request) {
@@ -70,11 +72,11 @@ func (s *Server) handleComparePage(w http.ResponseWriter, r *http.Request) {
 		results := s.runner.Run(r.Context(), prompt, providers)
 		diffs := compare.BuildDiffs(s.cfg.Compare, results)
 		s.renderPage(w, pageData{
-			Prompt:  prompt,
-			Models:  s.listModelOptions(),
+			Prompt:   prompt,
+			Models:   s.listModelOptions(),
 			Selected: modelIDs,
-			Results: results,
-			Diffs:   diffs,
+			Results:  results,
+			Diffs:    diffs,
 		})
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -157,6 +159,107 @@ func (s *Server) handleCompareJSON(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
 		log.Printf("encode json response: %v", err)
+	}
+}
+
+func (s *Server) handleCompareStream(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "read body failed", http.StatusBadRequest)
+		return
+	}
+	var req compareJSONRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	prompt := strings.TrimSpace(req.Prompt)
+	if prompt == "" {
+		http.Error(w, "prompt is required", http.StatusBadRequest)
+		return
+	}
+	providers, err := s.resolveProviders(req.ModelIDs)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	flush(w)
+
+	out := make(chan fanout.StreamEvent, 32)
+	go s.runner.RunStream(r.Context(), prompt, providers, out)
+
+	var results []fanout.ModelResult
+	for ev := range out {
+		switch ev.Kind {
+		case "model_start":
+			s.writeSSE(w, "model_start", map[string]string{
+				"model_id":     ev.ModelID,
+				"display_name": ev.DisplayName,
+			})
+		case "delta":
+			s.writeSSE(w, "delta", map[string]string{
+				"model_id": ev.ModelID,
+				"delta":    ev.Delta,
+			})
+		case "model_done":
+			if ev.Result != nil {
+				results = append(results, *ev.Result)
+				s.writeSSE(w, "model_done", jsonResult{
+					ModelID:          ev.Result.ModelID,
+					DisplayName:      ev.Result.DisplayName,
+					OK:               ev.Result.OK,
+					Content:          ev.Result.Content,
+					Error:            ev.Result.Error,
+					LatencyMs:        ev.Result.LatencyMs,
+					PromptTokens:     ev.Result.PromptTokens,
+					CompletionTokens: ev.Result.CompletionTokens,
+					TotalTokens:      ev.Result.TotalTokens,
+				})
+			}
+		case "all_models_done":
+			diffs := compare.BuildDiffs(s.cfg.Compare, results)
+			for _, d := range diffs {
+				s.writeSSE(w, "diff", d)
+			}
+			s.writeSSE(w, "done", map[string]bool{"ok": true})
+		case "error":
+			s.writeSSE(w, "error", map[string]string{"message": ev.Error})
+		}
+		flush(w)
+	}
+}
+
+func (s *Server) writeSSE(w http.ResponseWriter, event string, data any) {
+	var buf bytes.Buffer
+	buf.WriteString("event: ")
+	buf.WriteString(event)
+	buf.WriteString("\n")
+	buf.WriteString("data: ")
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(data); err != nil {
+		log.Printf("encode sse data: %v", err)
+		return
+	}
+	buf.WriteString("\n")
+	if _, err := w.Write(buf.Bytes()); err != nil {
+		log.Printf("write sse: %v", err)
+	}
+}
+
+func flush(w http.ResponseWriter) {
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
 	}
 }
 

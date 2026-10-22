@@ -14,6 +14,10 @@
     .models label { font-weight: normal; display: flex; align-items: center; gap: 0.35rem; }
     button { background: #2563eb; color: #fff; border: none; padding: 0.6rem 1.2rem; border-radius: 6px; font: inherit; cursor: pointer; }
     button:hover { background: #1d4ed8; }
+    button.secondary { background: #475569; }
+    button.secondary:hover { background: #334155; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .actions { display: flex; gap: 0.75rem; align-items: center; }
     .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1rem; margin-top: 2rem; }
     .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 8px; padding: 1rem; }
     .card h3 { margin: 0 0 0.5rem; font-size: 1rem; }
@@ -24,13 +28,14 @@
     .diff-block { margin-top: 2rem; }
     .diff-block h2 { font-size: 1.1rem; }
     .diff pre { background: #0f172a; color: #e2e8f0; padding: 1rem; border-radius: 8px; overflow-x: auto; }
+    #streamStatus { margin-top: 1rem; font-size: 0.9rem; color: #64748b; }
   </style>
 </head>
 <body>
   <h1>ai-diff-gate</h1>
   <p>单 Prompt 并发扇出多个模型，并排查看回复与行级文本 Diff。</p>
 
-  <form method="post" action="/compare">
+  <form id="compareForm" method="post" action="/compare">
     <label for="prompt">Prompt</label>
     <textarea id="prompt" name="prompt" required placeholder="输入要对比的 Prompt…">{{.Prompt}}</textarea>
 
@@ -48,8 +53,13 @@
       {{end}}
     </div>
 
-    <button type="submit">对比</button>
+    <div class="actions">
+      <button type="submit">对比（非流式）</button>
+      <button type="button" id="streamBtn" class="secondary">流式对比</button>
+    </div>
   </form>
+
+  <div id="streamStatus"></div>
 
   {{if .Results}}
   <section class="grid">
@@ -81,5 +91,180 @@
     {{end}}
   </section>
   {{end}}
+
+  <script>
+    const streamBtn = document.getElementById('streamBtn');
+    const form = document.getElementById('compareForm');
+    const statusEl = document.getElementById('streamStatus');
+
+    function setStatus(text) {
+      statusEl.textContent = text;
+    }
+
+    function selectedModels() {
+      return Array.from(form.querySelectorAll('input[name="models"]:checked')).map(el => el.value);
+    }
+
+    function ensureContainer() {
+      let el = document.getElementById('streamContainer');
+      if (!el) {
+        el = document.createElement('div');
+        el.id = 'streamContainer';
+        document.body.appendChild(el);
+      }
+      el.innerHTML = '';
+      return el;
+    }
+
+    function ensureModelCard(modelID, displayName) {
+      let card = document.getElementById('card-' + modelID);
+      if (!card) {
+        const grid = document.getElementById('streamGrid');
+        card = document.createElement('article');
+        card.id = 'card-' + modelID;
+        card.className = 'card';
+        card.innerHTML = '<h3>' + escapeHtml(displayName) + ' <small>(' + escapeHtml(modelID) + ')</small></h3>' +
+          '<p class="meta" id="meta-' + modelID + '">接收中…</p>' +
+          '<pre id="content-' + modelID + '"></pre>';
+        grid.appendChild(card);
+      }
+      return card;
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    function appendContent(modelID, text) {
+      const pre = document.getElementById('content-' + modelID);
+      if (pre) pre.textContent += text;
+    }
+
+    function setMeta(modelID, html) {
+      const meta = document.getElementById('meta-' + modelID);
+      if (meta) meta.innerHTML = html;
+    }
+
+    async function streamCompare() {
+      const prompt = form.prompt.value.trim();
+      if (!prompt) {
+        alert('请输入 Prompt');
+        return;
+      }
+      const modelIDs = selectedModels();
+      if (modelIDs.length === 0) {
+        alert('请至少选择一个模型');
+        return;
+      }
+
+      streamBtn.disabled = true;
+      setStatus('正在连接流式端点…');
+      const container = ensureContainer();
+      container.innerHTML = '<section id="streamGrid" class="grid"></section>' +
+        '<section id="streamDiffs" class="diff-block" style="display:none"><h2>文本 Diff</h2></section>';
+
+      try {
+        const resp = await fetch('/api/v1/compare/stream', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({prompt, model_ids: modelIDs})
+        });
+        if (!resp.ok) {
+          const text = await resp.text();
+          throw new Error('HTTP ' + resp.status + ': ' + text);
+        }
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let currentEvent = '';
+        let currentData = '';
+
+        function emitMessage() {
+          if (currentData === '' && currentEvent === '') return;
+          handleEvent(currentEvent || 'message', currentData);
+          currentEvent = '';
+          currentData = '';
+        }
+
+        while (true) {
+          const {done, value} = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, {stream: true});
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+          for (const line of lines) {
+            if (line === '') {
+              emitMessage();
+            } else if (line.startsWith('event:')) {
+              currentEvent = line.slice(6).trim();
+            } else if (line.startsWith('data:')) {
+              currentData = line.slice(5).trim();
+            }
+          }
+        }
+        emitMessage();
+        setStatus('流式对比完成');
+      } catch (err) {
+        setStatus('流式对比失败：' + err.message);
+        console.error(err);
+      } finally {
+        streamBtn.disabled = false;
+      }
+    }
+
+    function handleEvent(event, data) {
+      try {
+        const payload = JSON.parse(data);
+        switch (event) {
+          case 'model_start':
+            ensureModelCard(payload.model_id, payload.display_name);
+            break;
+          case 'delta':
+            ensureModelCard(payload.model_id, payload.model_id);
+            appendContent(payload.model_id, payload.delta);
+            break;
+          case 'model_done':
+            ensureModelCard(payload.model_id, payload.display_name || payload.model_id);
+            const res = payload;
+            if (res.ok) {
+              let meta = '<span class="status-ok">成功 · ' + res.latency_ms + ' ms';
+              if (res.total_tokens) {
+                meta += ' · tokens: ' + (res.prompt_tokens || 'N/A') + ' / ' + (res.completion_tokens || 'N/A') + ' / ' + res.total_tokens;
+              }
+              meta += '</span>';
+              setMeta(res.model_id, meta);
+            } else {
+              setMeta(res.model_id, '<span class="status-err">失败 · ' + res.latency_ms + ' ms</span>');
+              const pre = document.getElementById('content-' + res.model_id);
+              if (pre) pre.textContent = res.error || '';
+            }
+            break;
+          case 'diff':
+            const diffSection = document.getElementById('streamDiffs');
+            diffSection.style.display = 'block';
+            const diffDiv = document.createElement('div');
+            diffDiv.className = 'diff card';
+            diffDiv.innerHTML = '<h3>' + escapeHtml(payload.left_model_id) + ' ↔ ' + escapeHtml(payload.right_model_id) +
+              ' <small>(' + escapeHtml(payload.granularity) + ')</small></h3>' +
+              '<pre>' + escapeHtml(payload.unified_diff) + '</pre>';
+            diffSection.appendChild(diffDiv);
+            break;
+          case 'done':
+            setStatus('流式对比完成');
+            break;
+          case 'error':
+            setStatus('错误：' + (payload.message || ''));
+            break;
+        }
+      } catch (e) {
+        console.error('parse sse payload failed', event, data, e);
+      }
+    }
+
+    streamBtn.addEventListener('click', streamCompare);
+  </script>
 </body>
 </html>

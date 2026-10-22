@@ -176,7 +176,7 @@ type Provider interface {
 | 扩展点 | 接入方式（建议） |
 |--------|------------------|
 | 新厂商（Gemini、DeepSeek、本地） | 新增 adapter，实现 Provider；配置增加条目 |
-| SSE | Handler / Provider 增加流式路径；fanout 与 compare 需定义「流式对比」语义后再做 |
+| SSE | Handler / Provider 增加流式路径；fanout 推送 `model_start`/`delta`/`model_done`/`all_models_done`，handler 计算并推送 `diff` |
 | 语义相似度 | 在 `compare` 旁增加可选打分模块，不替换文本 Diff |
 | 更好 UI / 历史 | 替换或增强 `web/`；历史需持久化选型（本阶段不做） |
 
