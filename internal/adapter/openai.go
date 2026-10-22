@@ -32,6 +32,7 @@ func (p *openAIProvider) DisplayName() string { return p.cfg.DisplayName }
 type openAIRequest struct {
 	Model    string          `json:"model"`
 	Messages []openAIMessage `json:"messages"`
+	Stream   bool            `json:"stream,omitempty"`
 }
 
 type openAIMessage struct {
@@ -45,6 +46,9 @@ type openAIResponse struct {
 		Message struct {
 			Content string `json:"content"`
 		} `json:"message"`
+		Delta struct {
+			Content string `json:"content"`
+		} `json:"delta"`
 	} `json:"choices"`
 	Usage *struct {
 		PromptTokens     int `json:"prompt_tokens"`
@@ -57,6 +61,14 @@ type openAIResponse struct {
 }
 
 func (p *openAIProvider) Chat(ctx context.Context, req *provider.ChatRequest) (*provider.ChatResponse, error) {
+	return p.chat(ctx, req, false, nil)
+}
+
+func (p *openAIProvider) ChatStream(ctx context.Context, req *provider.ChatRequest, onDelta provider.DeltaFunc) (*provider.ChatResponse, error) {
+	return p.chat(ctx, req, true, onDelta)
+}
+
+func (p *openAIProvider) chat(ctx context.Context, req *provider.ChatRequest, stream bool, onDelta provider.DeltaFunc) (*provider.ChatResponse, error) {
 	key, err := p.cfg.ResolveAPIKey()
 	if err != nil {
 		return nil, err
@@ -73,6 +85,7 @@ func (p *openAIProvider) Chat(ctx context.Context, req *provider.ChatRequest) (*
 	body, err := json.Marshal(openAIRequest{
 		Model:    model,
 		Messages: msgs,
+		Stream:   stream,
 	})
 	if err != nil {
 		return nil, err
@@ -87,6 +100,9 @@ func (p *openAIProvider) Chat(ctx context.Context, req *provider.ChatRequest) (*
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+key)
+	if stream {
+		httpReq.Header.Set("Accept", "text/event-stream")
+	}
 
 	start := time.Now()
 	resp, err := p.client.Do(httpReq)
@@ -96,15 +112,60 @@ func (p *openAIProvider) Chat(ctx context.Context, req *provider.ChatRequest) (*
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		raw, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("%s API %s: %s", p.name, resp.Status, truncate(string(raw), 512))
+	}
+
+	if stream {
+		return p.readStream(resp.Body, latency, req.Model, onDelta)
+	}
+
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
+	return p.parseResponse(raw, latency, req.Model)
+}
 
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("%s API %s: %s", p.name, resp.Status, truncate(string(raw), 512))
+func (p *openAIProvider) readStream(r io.Reader, latency int64, model string, onDelta provider.DeltaFunc) (*provider.ChatResponse, error) {
+	var content strings.Builder
+	err := forEachSSE(r, func(ev sseEvent) error {
+		if ev.Data == "[DONE]" {
+			return nil
+		}
+		if ev.Data == "" {
+			return nil
+		}
+		var parsed openAIResponse
+		if err := json.Unmarshal([]byte(ev.Data), &parsed); err != nil {
+			return fmt.Errorf("decode %s stream chunk: %w", p.name, err)
+		}
+		if parsed.Error != nil && parsed.Error.Message != "" {
+			return fmt.Errorf("%s stream error: %s", p.name, parsed.Error.Message)
+		}
+		if len(parsed.Choices) > 0 {
+			delta := parsed.Choices[0].Delta.Content
+			if delta != "" {
+				content.WriteString(delta)
+				if onDelta != nil {
+					onDelta(provider.StreamDelta{Content: delta})
+				}
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
+	return &provider.ChatResponse{
+		Content:   content.String(),
+		Model:     model,
+		LatencyMs: latency,
+	}, nil
+}
 
+func (p *openAIProvider) parseResponse(raw []byte, latency int64, model string) (*provider.ChatResponse, error) {
 	var parsed openAIResponse
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		return nil, fmt.Errorf("decode %s response: %w", p.name, err)
@@ -119,7 +180,7 @@ func (p *openAIProvider) Chat(ctx context.Context, req *provider.ChatRequest) (*
 
 	out := &provider.ChatResponse{
 		Content:   content,
-		Model:     firstNonEmpty(parsed.Model, req.Model),
+		Model:     firstNonEmpty(parsed.Model, model),
 		LatencyMs: latency,
 	}
 	if parsed.Usage != nil {

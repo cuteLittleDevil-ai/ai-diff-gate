@@ -24,9 +24,18 @@ type ChatResponse struct {
 	TotalTokens      *int
 }
 
+// StreamDelta carries a single chunk of streamed content.
+type StreamDelta struct {
+	Content string
+}
+
+// DeltaFunc receives incremental content during a streaming call.
+type DeltaFunc func(StreamDelta)
+
 // Provider is a single configured model endpoint.
 type Provider interface {
 	ID() string
 	DisplayName() string
 	Chat(ctx context.Context, req *ChatRequest) (*ChatResponse, error)
+	ChatStream(ctx context.Context, req *ChatRequest, onDelta DeltaFunc) (*ChatResponse, error)
 }

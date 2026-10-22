@@ -21,8 +21,9 @@
 | 包含 | 不包含（见第 10 节） |
 |------|----------------------|
 | 配置驱动的多模型接入（至少 OpenAI、Anthropic、DeepSeek、MiniMax 协议形态） | 生产网关、用户体系、计费、HA |
-| Fan-out、文本 Diff、HTML 展示 | SSE 作为 P0 |
-| （可选）JSON API、延迟/token 展示 | 语义相似度、历史持久化 |
+| Fan-out、文本 Diff、HTML 展示 | 语义相似度、历史持久化 |
+| JSON API、延迟/token 展示 | — |
+| **SSE 流式对比**（`POST /api/v1/compare/stream`） | — |
 
 ### 1.2 术语
 
@@ -211,6 +212,54 @@ compare:
 
 ---
 
+### 4.4 SSE 流式对比 API
+
+新增端点：`POST /api/v1/compare/stream`
+
+- 请求体与 `POST /api/v1/compare` 相同：`prompt` + 可选 `model_ids`。
+- 响应头固定返回 `Content-Type: text/event-stream; charset=utf-8`。
+- 多模型并发 fan-out，各模型 delta 交错推送；客户端断连时尽力取消未完成调用。
+
+**事件格式（每行一个 SSE `data:` 负载，事件类型由 `event:` 指定）**
+
+```text
+event: model_start
+data: {"model_id":"openai-gpt","display_name":"OpenAI GPT-4o mini"}
+
+event: delta
+data: {"model_id":"openai-gpt","delta":"Fan-out"}
+
+event: model_done
+data: {"model_id":"openai-gpt","display_name":"OpenAI GPT-4o mini","ok":true,"content":"...","latency_ms":123,"prompt_tokens":10,"completion_tokens":20,"total_tokens":30}
+
+event: diff
+data: {"left_model_id":"openai-gpt","right_model_id":"deepseek-chat","granularity":"line","unified_diff":"..."}
+
+event: done
+data: {"ok":true}
+```
+
+**事件说明**
+
+| 事件 | 触发时机 | data 字段 |
+|------|----------|-----------|
+| `model_start` | 某模型开始流式调用 | `model_id`, `display_name` |
+| `delta` | 收到该模型增量文本 | `model_id`, `delta` |
+| `model_done` | 某模型调用完成（成功或失败） | 与 JSON API 单条 `results` 字段一致，额外含 `content`/`error` |
+| `diff` | 全部模型结束后，对成功结果两两生成行级 Diff | `left_model_id`, `right_model_id`, `granularity`, `unified_diff` |
+| `done` | 全部事件已推送 | `ok` |
+| `error` | 整单无法处理（如无模型） | `message` |
+
+**curl 示例**
+
+```bash
+curl -N -X POST http://localhost:8080/api/v1/compare/stream \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt":"用一句话解释 fan-out","model_ids":["openai-gpt","deepseek-chat"]}'
+```
+
+---
+
 ## 5. Fan-out 行为
 
 | 行为 | 建议默认（待确认） |
@@ -287,7 +336,6 @@ Compare 页 MVP 至少包含：
 
 - 生产级鉴权、多租户、额度与计费。
 - 集群部署、高可用、自动扩缩。
-- SSE / 流式对比作为 MVP 必测项。
 - 完整 OpenAI 兼容透明代理（除非 Q6 拍板并另开规格）。
 - 语义相似度、向量检索、请求历史库。
 - 密钥托管、密钥轮转平台。
