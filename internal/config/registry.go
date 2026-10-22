@@ -33,6 +33,8 @@ func buildOne(m ModelConfig, client *http.Client) (provider.Provider, error) {
 		return adapter.NewAnthropic(spec, client), nil
 	case "deepseek":
 		return adapter.NewDeepSeek(spec, client), nil
+	case "minimax":
+		return adapter.NewMiniMax(spec, client), nil
 	default:
 		return nil, fmt.Errorf("unsupported provider %q for model %q", m.Provider, m.ID)
 	}

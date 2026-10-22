@@ -95,6 +95,24 @@
 - 更完善的前端 UI。
 - 请求历史记录。
 
+### 6.3 已支持模型与协议来源
+
+`ai-diff-gate` 当前采用「统一内部请求 → 各厂商协议适配 → 归一化响应」的方式接入多模型。下表列出已实现 adapter 的厂商、配置示例，以及实现与对照依据的官方协议文档。
+
+| 厂商 / 模型 | 配置 `provider` | 配置 `model` 示例 | 接入协议 | 协议来源（官方文档） |
+|------------|----------------|------------------|----------|---------------------|
+| OpenAI GPT-4o mini | `openai` | `gpt-4o-mini` | OpenAI Chat Completions | https://platform.openai.com/docs/api-reference/chat/create |
+| Anthropic Claude | `anthropic` | `claude-3-5-sonnet-latest` | Anthropic Messages API | https://docs.anthropic.com/en/api/messages |
+| DeepSeek Chat | `deepseek` | `deepseek-chat` | OpenAI 兼容（Chat Completions） | DeepSeek: https://api-docs.deepseek.com/api/create-chat-completion；OpenAI 参考: https://platform.openai.com/docs/api-reference/chat/create |
+| MiniMax M3.1 Flash | `minimax` | `MiniMax-M3.1-Flash` | OpenAI 兼容（Chat Completions） | OpenAI 兼容说明: https://platform.minimax.io/docs/api-reference/text-openai-api；Chat Completions: https://platform.minimax.io/docs/api-reference/text-chat-openai；文本生成指南: https://platform.minimax.io/docs/guides/text-generation；OpenAI 参考: https://platform.openai.com/docs/api-reference/chat/create |
+
+说明：
+
+- **MiniMax** 同时提供 OpenAI 兼容端点（`https://api.minimax.io/v1`）与 Anthropic 兼容端点（`https://api.minimax.io/anthropic`，文档见 https://platform.minimax.io/docs/api-reference/text-anthropic-api）。本产品 Demo 阶段优先实现 OpenAI 兼容路径，与 DeepSeek 的接入方式保持一致；后续如需 Anthropic 兼容可再新增独立 adapter。
+- 配置示例见 `config.example.yaml`；各家 API Key 建议通过 `api_key_env` 环境变量注入，避免提交真实 Key 到仓库。
+
+这些协议文档是 fan-out、Diff、HTML/JSON 展示的上游契约来源：adapter 将官方请求/响应字段映射为内部 `ChatRequest` / `ChatResponse`，fanout 层不关心具体厂商协议，compare 层仅对归一化后的文本 `Content` 做行级差异计算。
+
 ---
 
 ## 7. 产品级验收标准

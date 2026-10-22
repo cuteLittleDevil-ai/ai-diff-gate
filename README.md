@@ -4,7 +4,7 @@
 
 ## 功能
 
-- OpenAI、Anthropic、DeepSeek 协议适配（可扩展 adapter）
+- OpenAI、Anthropic、DeepSeek、MiniMax 协议适配（可扩展 adapter）
 - Fan-out 并发调用，单模型超时默认 60s，部分失败 continue
 - 行级 unified diff（不忽略空白）
 - `GET` / `POST /compare` 对比页，`POST /api/v1/compare` JSON API
@@ -27,6 +27,7 @@ cp config.example.yaml config.yaml
 export OPENAI_API_KEY="your-key"
 export ANTHROPIC_API_KEY="your-key"
 export DEEPSEEK_API_KEY="your-key"
+export MINIMAX_API_KEY="your-key"
 ```
 
 3. 构建并启动：
@@ -45,7 +46,7 @@ go run ./cmd/server
 ```bash
 curl -s -X POST http://localhost:8080/api/v1/compare \
   -H 'Content-Type: application/json' \
-  -d '{"prompt":"用一句话解释 fan-out","model_ids":["openai-gpt","anthropic-claude"]}'
+  -d '{"prompt":"用一句话解释 fan-out","model_ids":["openai-gpt","anthropic-claude","minimax-m3.1-flash"]}'
 ```
 
 省略 `model_ids` 时使用配置中全部启用模型。
